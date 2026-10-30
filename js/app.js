@@ -12,15 +12,6 @@ const DEFAULT_CATEGORIES = [
   { name: "Svago", icon: "🎟️", color: PALETTE[6] },
   { name: "Altro", icon: "✦", color: PALETTE[8] },
 ];
-const CATEGORY_HINTS = {
-  Alimentari: ["spesa", "supermercato", "market", "alimentari", "pane", "frutta", "verdura"],
-  Trasporti: ["benzina", "metro", "treno", "bus", "autobus", "taxi", "parcheggio", "trasporto"],
-  Casa: ["affitto", "luce", "gas", "bolletta", "casa", "utenza", "internet"],
-  Ristoranti: ["pranzo", "cena", "ristorante", "pizza", "bar", "caffè", "colazione", "delivery"],
-  Shopping: ["vestiti", "scarpe", "negozio", "shopping", "acquisto"],
-  Salute: ["farmacia", "medico", "visita", "salute", "dentista"],
-  Svago: ["cinema", "concerto", "viaggio", "palestra", "libro", "svago"],
-};
 const $ = (selector) => document.querySelector(selector);
 const money = (value) => new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
 const dateFormatter = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short", year: "numeric" });
@@ -294,27 +285,18 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2600);
 }
 
-function parseVoiceExpense(transcript) {
-  const normalized = transcript.toLocaleLowerCase("it-IT").replace(/\b(euro|eur|€)\b/g, " ");
-  const amountMatch = normalized.match(/(?:^|\s)(\d+(?:[.,]\d{1,2})?)(?=\s|$)/);
-  if (!amountMatch) return { error: "Non ho riconosciuto l'importo. Riprova, ad esempio: “12 euro per il pranzo”." };
-  const amount = Number(amountMatch[1].replace(",", "."));
-  let title = transcript.replace(new RegExp(amountMatch[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), " ");
-  title = title.replace(/\b(ho\s+)?(speso|pagato|comprato|preso|euro|eur|per|di|da|una?|il|lo|la|gli|le|un|€)\b/gi, " ").replace(/[,.!?]/g, " ").replace(/\s+/g, " ").trim();
-  if (!title) title = "Spesa";
-  const category = guessCategory(transcript);
-  return { amount, title: title[0].toLocaleUpperCase("it-IT") + title.slice(1), category };
-}
-
-function guessCategory(text) {
-  const normalized = text.toLocaleLowerCase("it-IT");
-  for (const [category, hints] of Object.entries(CATEGORY_HINTS)) {
-    if (hints.some((hint) => normalized.includes(hint))) {
-      const match = state.categories.find((item) => item.name.toLocaleLowerCase("it-IT") === category.toLocaleLowerCase("it-IT"));
-      if (match) return match.name;
-    }
-  }
-  return state.categories.find((item) => item.name === "Altro")?.name || state.categories[0]?.name;
+async function parseVoiceExpense(transcript) {
+  const response = await fetch("/api/parse-expense", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      transcript,
+      categories: state.categories.map((category) => category.name),
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Interpretazione della frase non riuscita.");
+  return result;
 }
 
 function startVoiceInput() {
@@ -333,17 +315,23 @@ function startVoiceInput() {
   button.classList.add("is-listening");
   button.innerHTML = "● <span>Ti ascolto…</span>";
   $("#voice-status").textContent = "Parla ora: “12 euro per il pranzo”. La dettatura dipende dal browser.";
-  recognition.onresult = (event) => {
+  recognition.onresult = async (event) => {
     const transcript = event.results[0][0].transcript;
-    const parsed = parseVoiceExpense(transcript);
-    $("#voice-status").textContent = `Ho capito: “${transcript}”`;
-    if (parsed.error) {
-      $("#form-error").textContent = parsed.error;
-    } else {
-      titleInput.value = parsed.title;
+    const button = $("#voice-button");
+    button.disabled = true;
+    $("#voice-status").textContent = `Ho capito: “${transcript}”. Interpreto la spesa…`;
+    try {
+      const parsed = await parseVoiceExpense(transcript);
+      titleInput.value = parsed.description;
       amountInput.value = parsed.amount;
       categoryInput.value = parsed.category;
       $("#form-error").textContent = "";
+      $("#voice-status").textContent = `Compilato: “${transcript}”. Controlla i campi prima di salvare.`;
+    } catch (error) {
+      $("#form-error").textContent = error.message;
+      $("#voice-status").textContent = `Ho capito: “${transcript}”, ma non sono riuscito a interpretarlo.`;
+    } finally {
+      button.disabled = false;
     }
   };
   recognition.onerror = (event) => {
@@ -351,7 +339,7 @@ function startVoiceInput() {
   };
   recognition.onend = () => {
     button.classList.remove("is-listening");
-    button.innerHTML = "🎙 <span>Riprova</span>";
+    button.innerHTML = "🎙 <span>Parla</span>";
   };
   try { recognition.start(); } catch { button.classList.remove("is-listening"); }
 }
