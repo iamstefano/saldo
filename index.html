@@ -7,6 +7,7 @@
     <meta name="description" content="Tieni sotto controllo le tue spese, in modo semplice e privato." />
     <title>Saldo — La tua finanza, in equilibrio</title>
     <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/categories.css" />
     <script defer src="js/app.js"></script>
   </head>
   <body>
@@ -80,6 +81,19 @@
         <div class="voice-box"><div class="voice-copy"><span class="voice-icon">⌁</span><span><strong>Dettala a voce</strong><small id="voice-status">Ad esempio: “12 euro per il pranzo”</small></span></div><button class="voice-button" type="button" id="voice-button" aria-label="Inserisci una spesa con la voce">🎙 <span>Parla</span></button></div>
         <div class="form-grid"><label class="field field-wide">Descrizione<input name="title" id="expense-title" type="text" placeholder="Es. Spesa al supermercato" maxlength="60" required /></label><label class="field">Importo (€)<input name="amount" id="expense-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0,00" required /></label><label class="field">Categoria<div class="select-with-add"><select name="category" id="expense-category" required></select><button type="button" id="add-category" aria-label="Aggiungi categoria">＋</button></div></label><label class="field">Data<input name="date" id="expense-date" type="date" required /></label><label class="field field-wide">Nota <span class="optional">facoltativa</span><input name="note" id="expense-note" type="text" placeholder="Aggiungi un dettaglio" maxlength="120" /></label></div>
         <p class="form-error" id="form-error" role="alert"></p><div class="dialog-actions"><button class="button button-soft" type="button" data-close-dialog>Annulla</button><button class="button button-primary" type="submit" id="save-expense">Salva spesa <span>→</span></button></div>
+      </form>
+    </dialog>
+    <dialog class="expense-dialog category-manager-dialog" id="category-manager-dialog" aria-labelledby="category-manager-title">
+      <form class="expense-form category-manager-form" id="category-manager-form">
+        <div class="dialog-header"><div><p class="eyebrow">ORGANIZZA LE TUE SPESE</p><h2 id="category-manager-title">Personalizza categorie</h2></div><button class="icon-button" type="button" data-close-category-manager aria-label="Chiudi">×</button></div>
+        <p class="category-manager-help">Modifica nome, icona e colore oppure aggiungi o rimuovi una categoria. Le spese seguono il nuovo nome; quelle di una categoria rimossa vengono spostate in “Altro” o nella prima categoria disponibile.</p>
+        <div class="category-manager-list" id="category-manager-list" aria-label="Categorie esistenti"></div>
+        <section class="category-add-panel" aria-labelledby="category-add-title">
+          <h3 id="category-add-title">Aggiungi una categoria</h3>
+          <div class="category-add-fields"><label class="field">Nome<input id="new-category-name" type="text" maxlength="50" placeholder="Es. Viaggi" /></label><label class="field">Icona<input id="new-category-icon" type="text" maxlength="8" value="✨" aria-label="Icona della nuova categoria" /></label><label class="field">Colore<input id="new-category-color" class="category-color-input" type="color" value="#7565f0" aria-label="Colore della nuova categoria" /></label><button class="button button-soft category-add-button" id="add-managed-category" type="button">＋ Aggiungi</button></div>
+        </section>
+        <p class="form-error category-manager-error" id="category-manager-error" role="alert"></p>
+        <div class="dialog-actions"><button class="button button-soft" type="button" data-close-category-manager>Annulla</button><button class="button button-primary" type="submit">Salva categorie <span>→</span></button></div>
       </form>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

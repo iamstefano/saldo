@@ -23,6 +23,7 @@ let state = loadState();
 let currentPeriod = "month";
 let editingId = null;
 let recognition = null;
+let voiceSessionId = 0;
 let toastTimer;
 
 const dialog = $("#expense-dialog");
@@ -32,6 +33,9 @@ const amountInput = $("#expense-amount");
 const categoryInput = $("#expense-category");
 const dateInput = $("#expense-date");
 const noteInput = $("#expense-note");
+const categoryManagerDialog = $("#category-manager-dialog");
+const categoryManagerList = $("#category-manager-list");
+let categoryDraft = [];
 
 function loadState() {
   try {
@@ -243,6 +247,7 @@ function escapeHtml(value) {
 }
 
 function openDialog(expense = null) {
+  resetVoiceInput();
   editingId = expense?.id || null;
   form.reset();
   $("#dialog-title").textContent = expense ? "Modifica la spesa" : "Aggiungi una spesa";
@@ -277,12 +282,186 @@ function addCategory() {
   showToast(`Categoria “${name}” aggiunta.`);
 }
 
+function openCategoryManager() {
+  categoryDraft = state.categories.map((category) => ({ ...category, originalName: category.name }));
+  $("#category-manager-error").textContent = "";
+  $("#new-category-name").value = "";
+  $("#new-category-icon").value = "✨";
+  $("#new-category-color").value = PALETTE[0];
+  renderCategoryManager();
+  categoryManagerDialog.showModal();
+}
+
+function renderCategoryManager() {
+  categoryManagerList.replaceChildren();
+  categoryDraft.forEach((category, index) => {
+    if (!/^#[\da-f]{6}$/i.test(category.color)) category.color = PALETTE[index % PALETTE.length];
+    const row = document.createElement("div");
+    row.className = "category-editor-row";
+
+    const nameWrap = document.createElement("div");
+    nameWrap.className = "category-editor-name-wrap";
+
+    const iconInput = document.createElement("input");
+    iconInput.className = "field-input category-editor-icon";
+    iconInput.type = "text";
+    iconInput.maxLength = 8;
+    iconInput.value = category.icon || "✦";
+    iconInput.setAttribute("aria-label", `Icona per ${category.name}`);
+    iconInput.dataset.categoryIndex = index;
+    iconInput.dataset.categoryField = "icon";
+
+    const nameInput = document.createElement("input");
+    nameInput.className = "field-input category-editor-name";
+    nameInput.type = "text";
+    nameInput.maxLength = 50;
+    nameInput.value = category.name;
+    nameInput.setAttribute("aria-label", `Nome categoria ${category.name}`);
+    nameInput.dataset.categoryIndex = index;
+    nameInput.dataset.categoryField = "name";
+
+    nameWrap.append(iconInput, nameInput);
+
+    const colorInput = document.createElement("input");
+    colorInput.className = "category-editor-color";
+    colorInput.type = "color";
+    colorInput.value = /^#[\da-f]{6}$/i.test(category.color) ? category.color : PALETTE[index % PALETTE.length];
+    colorInput.setAttribute("aria-label", `Colore categoria ${category.name}`);
+    colorInput.dataset.categoryIndex = index;
+    colorInput.dataset.categoryField = "color";
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "category-remove-button";
+    removeButton.type = "button";
+    removeButton.textContent = "×";
+    removeButton.setAttribute("aria-label", `Rimuovi categoria ${category.name}`);
+    removeButton.dataset.removeCategory = index;
+    removeButton.disabled = categoryDraft.length === 1;
+
+    row.append(nameWrap, colorInput, removeButton);
+    categoryManagerList.append(row);
+  });
+}
+
+function addManagedCategory() {
+  const nameInput = $("#new-category-name");
+  const name = nameInput.value.trim();
+  const error = $("#category-manager-error");
+  if (!name) {
+    error.textContent = "Inserisci il nome della categoria da aggiungere.";
+    nameInput.focus();
+    return;
+  }
+  if (categoryDraft.some((category) => category.name.toLocaleLowerCase("it-IT") === name.toLocaleLowerCase("it-IT"))) {
+    error.textContent = "Esiste già una categoria con questo nome.";
+    nameInput.focus();
+    return;
+  }
+
+  categoryDraft.push({
+    name,
+    icon: $("#new-category-icon").value.trim() || "✦",
+    color: $("#new-category-color").value,
+    originalName: null,
+  });
+  nameInput.value = "";
+  $("#new-category-icon").value = "✨";
+  error.textContent = "";
+  renderCategoryManager();
+  nameInput.focus();
+}
+
+function saveManagedCategories(event) {
+  event.preventDefault();
+  const error = $("#category-manager-error");
+  const categories = categoryDraft.map((category) => ({
+    ...category,
+    name: category.name.trim(),
+    icon: category.icon.trim() || "✦",
+  }));
+
+  if (!categories.length) {
+    error.textContent = "Mantieni almeno una categoria.";
+    return;
+  }
+  if (categories.some((category) => !category.name)) {
+    error.textContent = "Ogni categoria deve avere un nome.";
+    return;
+  }
+  if (categories.some((category) => category.name.length > 50)) {
+    error.textContent = "Il nome di una categoria non può superare 50 caratteri.";
+    return;
+  }
+  const uniqueNames = new Set(categories.map((category) => category.name.toLocaleLowerCase("it-IT")));
+  if (uniqueNames.size !== categories.length) {
+    error.textContent = "I nomi delle categorie devono essere univoci.";
+    return;
+  }
+
+  const categoryByOriginalName = new Map(categories.filter((category) => category.originalName).map((category) => [category.originalName, category.name]));
+  const fallbackCategory = categories.find((category) => category.name.toLocaleLowerCase("it-IT") === "altro") || categories[0];
+  state.expenses = state.expenses.map((expense) => ({
+    ...expense,
+    category: categoryByOriginalName.get(expense.category) || fallbackCategory.name,
+  }));
+  state.categories = categories.map(({ originalName, ...category }) => category);
+  persist();
+  render();
+  categoryManagerDialog.close();
+  showToast("Categorie aggiornate.");
+}
+
+categoryManagerList.addEventListener("input", (event) => {
+  const input = event.target.closest("[data-category-field]");
+  if (!input) return;
+  const category = categoryDraft[Number(input.dataset.categoryIndex)];
+  if (category) category[input.dataset.categoryField] = input.value;
+  $("#category-manager-error").textContent = "";
+});
+
+categoryManagerList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-category]");
+  if (!button) return;
+  const index = Number(button.dataset.removeCategory);
+  const category = categoryDraft[index];
+  if (!category || categoryDraft.length === 1) return;
+
+  const expenseCount = state.expenses.filter((expense) => expense.category === category.originalName).length;
+  if (expenseCount && !window.confirm(`Questa categoria è usata da ${expenseCount} ${expenseCount === 1 ? "spesa" : "spese"}. Se la rimuovi, verranno spostate in “Altro” o nella prima categoria disponibile. Continuare?`)) return;
+
+  categoryDraft.splice(index, 1);
+  $("#category-manager-error").textContent = "";
+  renderCategoryManager();
+});
+
+$("#add-managed-category").addEventListener("click", addManagedCategory);
+$("#category-manager-form").addEventListener("submit", saveManagedCategories);
+document.querySelectorAll("[data-close-category-manager]").forEach((button) => {
+  button.addEventListener("click", () => categoryManagerDialog.close());
+});
+categoryManagerDialog.addEventListener("click", (event) => {
+  if (event.target === categoryManagerDialog) categoryManagerDialog.close();
+});
+
 function showToast(message) {
   const toast = $("#toast");
   toast.textContent = message;
   toast.classList.add("is-visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2600);
+}
+
+function resetVoiceInput() {
+  voiceSessionId += 1;
+  const activeRecognition = recognition;
+  recognition = null;
+  if (activeRecognition) activeRecognition.abort();
+
+  const button = $("#voice-button");
+  button.classList.remove("is-listening");
+  button.disabled = false;
+  button.innerHTML = "🎙 <span>Parla</span>";
+  $("#voice-status").textContent = "Ad esempio: “12 euro per il pranzo”";
 }
 
 async function parseVoiceExpense(transcript) {
@@ -328,42 +507,51 @@ function startVoiceInput() {
     showToast("La dettatura non è disponibile in questo browser.");
     return;
   }
-  if (recognition) recognition.abort();
-  recognition = new SpeechRecognition();
-  recognition.lang = "it-IT";
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
+  resetVoiceInput();
+  const sessionId = ++voiceSessionId;
+  const activeRecognition = new SpeechRecognition();
+  recognition = activeRecognition;
+  activeRecognition.lang = "it-IT";
+  activeRecognition.interimResults = false;
+  activeRecognition.maxAlternatives = 1;
   const button = $("#voice-button");
   button.classList.add("is-listening");
   button.innerHTML = "● <span>Ti ascolto…</span>";
   $("#voice-status").textContent = "Parla ora: “12 euro per il pranzo”. La dettatura dipende dal browser.";
-  recognition.onresult = async (event) => {
+  activeRecognition.onresult = async (event) => {
     const transcript = event.results[0][0].transcript;
-    const button = $("#voice-button");
     button.disabled = true;
     $("#voice-status").textContent = `Ho capito: “${transcript}”. Interpreto la spesa…`;
     try {
       const parsed = await parseVoiceExpense(transcript);
+      if (sessionId !== voiceSessionId || !dialog.open) return;
       titleInput.value = parsed.description;
       amountInput.value = parsed.amount;
       categoryInput.value = parsed.category;
       $("#form-error").textContent = "";
       $("#voice-status").textContent = `Compilato: “${transcript}”. Controlla i campi prima di salvare.`;
     } catch (error) {
+      if (sessionId !== voiceSessionId || !dialog.open) return;
       $("#form-error").textContent = error.message;
       $("#voice-status").textContent = `Errore durante l'interpretazione: ${error.message}`;
     } finally {
-      button.disabled = false;
+      if (sessionId === voiceSessionId && dialog.open) button.disabled = false;
     }
   };
-  recognition.onerror = (event) => {
+  activeRecognition.onerror = (event) => {
+    if (sessionId !== voiceSessionId || !dialog.open) return;
     $("#voice-status").textContent = event.error === "not-allowed" ? "Consenti l'accesso al microfono nelle impostazioni del browser." : "Non ho capito: riprova oppure inserisci i dati manualmente.";
   };
-  recognition.onend = () => {
+  activeRecognition.onend = () => {
+    if (sessionId !== voiceSessionId) return;
+    if (recognition === activeRecognition) recognition = null;
     button.classList.remove("is-listening");
     button.innerHTML = "🎙 <span>Parla</span>";
+    button.disabled = false;
   };
-  try { recognition.start(); } catch { button.classList.remove("is-listening"); }
+  try { activeRecognition.start(); } catch {
+    if (sessionId === voiceSessionId) resetVoiceInput();
+  }
 }
 
 form.addEventListener("submit", (event) => {
@@ -387,9 +575,10 @@ form.addEventListener("submit", (event) => {
 
 $("[data-open-expense]").addEventListener("click", () => openDialog());
 document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => dialog.close()));
+dialog.addEventListener("close", resetVoiceInput);
 dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
 $("#add-category").addEventListener("click", addCategory);
-$("#manage-categories").addEventListener("click", addCategory);
+$("#manage-categories").addEventListener("click", openCategoryManager);
 $("#voice-button").addEventListener("click", startVoiceInput);
 $("#expense-search").addEventListener("input", renderTransactions);
 $("#category-filter").addEventListener("change", renderTransactions);
