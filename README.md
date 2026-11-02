@@ -21,3 +21,12 @@ Spese, categorie e budget sono conservati nel `localStorage` del browser. Il mic
 3. Avvia l'app con `npm start` e apri `http://localhost:3000`.
 
 Per usare il microfono, il browser richiede il relativo permesso e un'origine sicura come `localhost`. La trascrizione vocale dipende dal supporto del browser; l'interpretazione di importo, descrizione e categoria avviene invece tramite il backend e la Gemini API. Quando la quota gratuita viene raggiunta, le richieste possono fallire fino al ripristino della quota.
+
+## Deploy su Vercel
+
+1. Importa il repository in Vercel e lascia la directory di progetto come root; non impostare un Output Directory personalizzato.
+2. In **Project → Settings → Environment Variables**, aggiungi `GEMINI_API_KEY` e, facoltativamente, `GEMINI_MODEL`. Seleziona gli ambienti da usare.
+3. Esegui il deploy (o fai redeploy dopo aver aggiunto le variabili). Vercel esporrà `api/parse-expense.js` all'indirizzo `/api/parse-expense` e servirà i file statici del progetto.
+4. Verifica la funzione da **Deployments → Functions/Logs**. In locale, `npm start` usa invece `local-server.js` e il file `.env`.
+
+La logica della route è condivisa in `utils/parse-expense.js`; non inserire la chiave API nel frontend o nel repository.

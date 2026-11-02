@@ -294,7 +294,16 @@ async function parseVoiceExpense(transcript) {
       categories: state.categories.map((category) => category.name),
     }),
   });
-  const result = await response.json();
+  const body = await response.text();
+  let result;
+  try {
+    result = body ? JSON.parse(body) : {};
+  } catch {
+    if (response.status === 404) {
+      throw new Error("Il backend /api/parse-expense non è stato trovato nel deploy. Verifica che Vercel stia eseguendo l'app Express, non solo i file statici.");
+    }
+    throw new Error(`Il server ha restituito una risposta non JSON (HTTP ${response.status}). Verifica il deploy del backend su Vercel.`);
+  }
   if (!response.ok) throw new Error(result.error || "Interpretazione della frase non riuscita.");
   return result;
 }
