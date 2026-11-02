@@ -1,5 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
 export async function handleParseExpense(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -18,37 +16,61 @@ export async function handleParseExpense(req, res) {
     return res.status(400).json({ error: "Non ci sono categorie disponibili." });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    return res.status(503).json({ error: "Servizio non configurato: aggiungi GEMINI_API_KEY alle variabili d'ambiente del deploy." });
+    return res.status(503).json({ error: "Servizio non configurato: aggiungi GROQ_API_KEY alle variabili d'ambiente del deploy." });
   }
 
   try {
-    const gemini = new GoogleGenAI({ apiKey });
-    const response = await gemini.models.generateContent({
-      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-      contents: JSON.stringify({ frase: transcript, categorie_disponibili: categories }),
-      config: {
-        httpOptions: {
-          timeout: 20000,
-          retryOptions: { attempts: 1 },
-        },
-        systemInstruction: "Interpreti dettature in italiano per registrare una singola spesa personale. Estrai l'importo numerico in euro, una descrizione breve e la categoria più adatta scegliendola esclusivamente tra quelle fornite. Non inventare un importo: se non è chiaro, usa 0. Non aggiungere informazioni non dette.",
-        temperature: 0,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            amount: { type: Type.NUMBER },
-            description: { type: Type.STRING },
-            category: { type: Type.STRING, enum: categories },
-          },
-          required: ["amount", "description", "category"],
-        },
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
+        messages: [
+          {
+            role: "system",
+            content: `Interpreti dettature in italiano per registrare una singola spesa personale. Estrai l'importo numerico in euro, una descrizione breve e la categoria più adatta scegliendola esclusivamente tra quelle fornite. Non inventare un importo: se non è chiaro, usa 0. Non aggiungere informazioni non dette. Rispondi esclusivamente con un oggetto JSON con le proprietà amount (numero), description (stringa) e category (stringa). La categoria deve corrispondere esattamente a una delle categorie disponibili: ${JSON.stringify(categories)}.`,
+          },
+          {
+            role: "user",
+            content: JSON.stringify({ frase: transcript, categorie_disponibili: categories }),
+          },
+        ],
+        temperature: 0,
+        max_tokens: 200,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "expense",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                amount: { type: "number" },
+                description: { type: "string" },
+                category: { type: "string", enum: categories },
+              },
+              required: ["amount", "description", "category"],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(20000),
     });
 
-    const content = response.text;
+    if (!response.ok) {
+      const error = new Error(`Groq API ha risposto con HTTP ${response.status}.`);
+      error.status = response.status;
+      throw error;
+    }
+
+    const payload = await response.json();
+    const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error("Il modello non ha restituito dati strutturati.");
     const result = JSON.parse(content);
     const amount = Number(result.amount);
@@ -66,10 +88,16 @@ export async function handleParseExpense(req, res) {
       code: error.code,
     });
     if (error.status === 429) {
-      return res.status(429).json({ error: "La quota gratuita di Gemini è temporaneamente esaurita. Riprova più tardi." });
+      return res.status(429).json({ error: "Il limite gratuito di Groq è stato raggiunto. Riprova più tardi." });
     }
-    if (error.status === 503 || error.code === "UNAVAILABLE") {
-      return res.status(503).json({ error: "Gemini è temporaneamente sovraccarico. Riprova tra un minuto." });
+    if (error.status === 401 || error.status === 403) {
+      return res.status(503).json({ error: "La chiave Groq non è valida o non è autorizzata. Verifica la configurazione del servizio." });
+    }
+    if (error.status === 404) {
+      return res.status(503).json({ error: "Il modello Groq configurato non è disponibile. Verifica GROQ_MODEL." });
+    }
+    if (error.status >= 500 || error.name === "TimeoutError" || error.name === "AbortError" || error instanceof TypeError) {
+      return res.status(503).json({ error: "Groq è temporaneamente non disponibile. Riprova tra poco." });
     }
     return res.status(502).json({ error: "Non riesco a interpretare la frase in questo momento. Riprova o compila i campi manualmente." });
   }
