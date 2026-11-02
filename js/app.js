@@ -1,7 +1,10 @@
 "use strict";
 
 const STORAGE_KEY = "saldo-personal-finance-v1";
-const PALETTE = ["#7565f0", "#37ae91", "#f1a94e", "#e46d78", "#51a7d8", "#aa78d5", "#8fbd59", "#ee83b0", "#75849b", "#c28b62"];
+const THEME_STORAGE_KEY = "saldo-theme-preference";
+const CLOUD_SHEET_KEY = "saldo-google-sheet-v1";
+const CLOUD_BASELINE_KEY = "saldo-google-baseline-v1";
+const PALETTE = ["#d9ff43", "#3458ff", "#ff7554", "#d592ff", "#31c7a2", "#f5c451", "#f0709b", "#79c9ff", "#a0c768", "#c28b62"];
 const DEFAULT_CATEGORIES = [
   { name: "Alimentari", icon: "🥑", color: PALETTE[0] },
   { name: "Trasporti", icon: "🚇", color: PALETTE[1] },
@@ -25,9 +28,20 @@ let editingId = null;
 let recognition = null;
 let voiceSessionId = 0;
 let toastTimer;
+let cloudSheet = readLocalJson(CLOUD_SHEET_KEY, null);
+let cloudBaseline = readLocalStorageValue(CLOUD_BASELINE_KEY);
+let cloudSyncTimer = null;
+let cloudSyncing = false;
+let cloudSyncPending = false;
+
+const googleSheets = window.SaldoGoogleSheets;
+googleSheets?.configure(window.SALDO_GOOGLE_CONFIG);
 
 const dialog = $("#expense-dialog");
+const budgetDialog = $("#budget-dialog");
 const form = $("#expense-form");
+const budgetForm = $("#budget-form");
+const budgetInput = $("#budget-amount");
 const titleInput = $("#expense-title");
 const amountInput = $("#expense-amount");
 const categoryInput = $("#expense-category");
@@ -53,6 +67,47 @@ function loadState() {
   return { expenses: [], categories: DEFAULT_CATEGORIES.map((category) => ({ ...category })), budget: 1200 };
 }
 
+function readLocalJson(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readLocalStorageValue(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function getInitialTheme() {
+  const savedTheme = readLocalStorageValue(THEME_STORAGE_KEY);
+  if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme, savePreference = false) {
+  const isDark = theme === "dark";
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  const toggle = $("#theme-toggle");
+  toggle.setAttribute("aria-label", isDark ? "Attiva tema chiaro" : "Attiva tema scuro");
+  toggle.title = isDark ? "Attiva tema chiaro" : "Attiva tema scuro";
+  $(".theme-toggle-icon").textContent = isDark ? "☀" : "◐";
+  $(".theme-toggle-label").textContent = isDark ? "Tema chiaro" : "Tema scuro";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", isDark ? "#141512" : "#f0eee6");
+  if (savePreference) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // The selected theme remains applied for this page even when storage is unavailable.
+    }
+  }
+}
+
 function isValidExpense(item) {
   return item && typeof item.id === "string" && typeof item.title === "string" && Number.isFinite(Number(item.amount)) && typeof item.date === "string";
 }
@@ -64,6 +119,7 @@ function persist() {
     showToast("Spazio locale non disponibile: i dati potrebbero non essere salvati.");
     console.error("Salvataggio locale non riuscito.", error);
   }
+  scheduleCloudSync();
 }
 
 function categoryFor(name) {
@@ -76,6 +132,7 @@ function getMonthExpenses(date = new Date()) {
     return expenseDate.getMonth() === date.getMonth() && expenseDate.getFullYear() === date.getFullYear();
   });
 }
+  persist();
 
 function render() {
   renderCategories();
@@ -138,7 +195,7 @@ function renderDonut(byCategory, total) {
   const legend = $("#category-legend");
   $("#category-total").textContent = money(total).replace(/,\d{2}/, "");
   if (!sorted.length) {
-    $("#category-donut").style.background = "conic-gradient(#eeeff4 0 100%)";
+    $("#category-donut").style.background = "conic-gradient(var(--surface-muted) 0 100%)";
     legend.innerHTML = '<p class="empty-legend">Le categorie appariranno qui.</p>';
     return;
   }
@@ -264,6 +321,32 @@ function openDialog(expense = null) {
   }
   dialog.showModal();
   setTimeout(() => (expense ? titleInput : amountInput).focus(), 40);
+}
+
+function openBudgetDialog() {
+  $("#budget-error").textContent = "";
+  budgetInput.value = state.budget.toFixed(2);
+  budgetDialog.showModal();
+  setTimeout(() => {
+    budgetInput.focus();
+    budgetInput.select();
+  }, 40);
+}
+
+function saveBudget(event) {
+  event.preventDefault();
+  const budget = Number(budgetInput.value);
+  if (!Number.isFinite(budget) || budget <= 0) {
+    $("#budget-error").textContent = "Inserisci un importo valido, maggiore di zero.";
+    budgetInput.focus();
+    return;
+  }
+
+  state.budget = Math.round(budget * 100) / 100;
+  persist();
+  renderSummary();
+  budgetDialog.close();
+  showToast("Budget mensile aggiornato.");
 }
 
 function addCategory() {
@@ -443,6 +526,282 @@ categoryManagerDialog.addEventListener("click", (event) => {
   if (event.target === categoryManagerDialog) categoryManagerDialog.close();
 });
 
+function cloudSnapshot(value = state) {
+  return JSON.stringify({ schemaVersion: 1, data: value });
+}
+
+function normalizeDataState(value) {
+  const candidate = value?.data && typeof value.data === "object" ? value.data : value;
+  if (!candidate || !Array.isArray(candidate.categories) || !Array.isArray(candidate.expenses)) {
+    throw new Error("Il file o il foglio non contiene dati Saldo validi.");
+  }
+
+  const categories = candidate.categories
+    .filter((category) => category && typeof category.name === "string")
+    .map((category) => ({
+      name: category.name.trim(),
+      icon: typeof category.icon === "string" && category.icon.trim() ? category.icon.trim() : "✦",
+      color: /^#[\da-f]{6}$/i.test(category.color) ? category.color : PALETTE[0],
+    }));
+  const normalizedNames = categories.map((category) => category.name.toLocaleLowerCase("it-IT"));
+  if (!categories.length || categories.some((category) => !category.name || category.name.length > 50) || new Set(normalizedNames).size !== normalizedNames.length) {
+    throw new Error("Le categorie importate devono avere nomi validi e univoci.");
+  }
+
+  const fallbackCategory = categories.find((category) => category.name.toLocaleLowerCase("it-IT") === "altro") || categories[0];
+  const expenses = candidate.expenses.map((expense) => {
+    if (!isValidExpense(expense) || !expense.title.trim() || !Number.isFinite(Number(expense.amount)) || Number(expense.amount) <= 0) {
+      throw new Error("Una o più spese nel backup non sono valide.");
+    }
+    return {
+      ...expense,
+      amount: Number(expense.amount),
+      category: categories.some((category) => category.name === expense.category) ? expense.category : fallbackCategory.name,
+      note: typeof expense.note === "string" ? expense.note : "",
+      createdAt: Number(expense.createdAt) || Date.now(),
+    };
+  });
+  const budget = Number(candidate.budget);
+  if (!Number.isFinite(budget) || budget < 0) throw new Error("Il budget nel backup non è valido.");
+  return { expenses, categories, budget };
+}
+
+function saveCloudLink(sheet, baseline) {
+  cloudSheet = sheet;
+  cloudBaseline = baseline;
+  try {
+    if (sheet) localStorage.setItem(CLOUD_SHEET_KEY, JSON.stringify(sheet));
+    else localStorage.removeItem(CLOUD_SHEET_KEY);
+    if (baseline === null) localStorage.removeItem(CLOUD_BASELINE_KEY);
+    else localStorage.setItem(CLOUD_BASELINE_KEY, baseline);
+  } catch (error) {
+    console.warn("Non è stato possibile salvare le impostazioni di sincronizzazione.", error);
+  }
+  updateDataManager();
+}
+
+function updateDataManager(message = "") {
+  const configured = googleSheets?.isConfigured() || false;
+  $("#storage-mode-label").textContent = cloudSheet ? "Locale + Google Sheets" : "Solo su questo dispositivo";
+  const connectButton = $("#connect-google-sheet");
+  const changeButton = $("#change-google-sheet");
+  const disconnectButton = $("#disconnect-google-sheet");
+  const status = $("#cloud-status");
+  const setupNote = $("#google-setup-note");
+  connectButton.disabled = !configured;
+  connectButton.textContent = cloudSheet ? "Ricollega al foglio" : "Scegli il tuo foglio";
+  changeButton.hidden = !cloudSheet || !configured;
+  disconnectButton.hidden = !cloudSheet;
+  if (!configured) {
+    setupNote.textContent = `Google Sheets non è ancora configurato dal proprietario dell’app. Mancano: ${googleSheets?.missingConfiguration().join(", ") || "configurazione Google"}.`;
+  } else {
+    setupNote.innerHTML = 'Crea un foglio Google se non ne hai già uno. <a href="https://sheets.new" target="_blank" rel="noopener">Crea un foglio</a>. L’app aggiungerà una scheda “Saldo” senza modificare le altre schede.';
+  }
+  if (message) status.textContent = message;
+  else if (cloudSheet) status.textContent = `Foglio selezionato: ${cloudSheet.name}. Ricollega Google per sincronizzare in questa sessione.`;
+  else status.textContent = "Non collegato. Scegli un foglio nel tuo Drive per sincronizzare i dati.";
+}
+
+function openDataManager() {
+  updateDataManager();
+  $("#data-manager-dialog").showModal();
+}
+
+function hasMeaningfulLocalData() {
+  return state.expenses.length > 0 || state.categories.some((category, index) => category.name !== DEFAULT_CATEGORIES[index]?.name);
+}
+
+function applyDataState(nextState) {
+  state = nextState;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn("Non è stato possibile aggiornare la copia locale.", error);
+  }
+  render();
+}
+
+async function connectGoogleSheet(chooseAnother = false) {
+  const connectButton = $("#connect-google-sheet");
+  connectButton.disabled = true;
+  updateDataManager("Autorizzazione Google in corso…");
+  try {
+    await googleSheets.authorize();
+    const selected = cloudSheet && !chooseAnother ? cloudSheet : await googleSheets.pickSpreadsheet();
+    if (!selected) {
+      updateDataManager();
+      return;
+    }
+
+    updateDataManager("Lettura del foglio selezionato…");
+    const remote = await googleSheets.readState(selected.id);
+    const existingLink = cloudSheet?.id === selected.id;
+    const localJson = cloudSnapshot();
+    let remoteJson = null;
+
+    if (remote.data) {
+      const remoteState = normalizeDataState(remote.data);
+      remoteJson = cloudSnapshot(remoteState);
+      if (existingLink && cloudBaseline && localJson !== cloudBaseline && remoteJson === cloudBaseline) {
+        saveCloudLink({ ...selected, name: remote.title }, cloudBaseline);
+        updateDataManager("Invio al foglio delle modifiche locali in sospeso…");
+        await syncCloudState();
+        return;
+      }
+
+      if (existingLink && cloudBaseline && localJson === cloudBaseline && remoteJson !== cloudBaseline) {
+        applyDataState(remoteState);
+        saveCloudLink({ ...selected, name: remote.title }, remoteJson);
+        updateDataManager(`Aggiornato dal foglio “${remote.title}”.`);
+        return;
+      }
+
+      if (existingLink && cloudBaseline && localJson !== cloudBaseline && remoteJson !== cloudBaseline) {
+        const keepLocal = window.confirm("Il foglio e questo dispositivo sono stati modificati dall’ultima sincronizzazione. OK: mantieni e carica la copia di questo dispositivo. Annulla: usa i dati del foglio.");
+        if (keepLocal) {
+          saveCloudLink({ ...selected, name: remote.title }, remoteJson);
+          await syncCloudState();
+          return;
+        }
+      } else if (hasMeaningfulLocalData() && localJson !== remoteJson) {
+        const useSheet = window.confirm("Il foglio contiene dati. Vuoi caricarli e sostituire i dati locali di questo browser? Esporta prima un backup se vuoi conservarli.");
+        if (!useSheet) {
+          updateDataManager();
+          return;
+        }
+      }
+
+      applyDataState(remoteState);
+    } else {
+      if (cloudBaseline && existingLink) {
+        const restoreSheet = window.confirm("La scheda Saldo nel foglio risulta vuota. Vuoi ripristinarla con i dati di questo dispositivo?");
+        if (!restoreSheet) {
+          updateDataManager("Il foglio è vuoto; i dati locali sono rimasti intatti. Esporta un backup o ricollega un altro foglio.");
+          return;
+        }
+      } else if (hasMeaningfulLocalData()) {
+        const migrate = window.confirm("Il foglio non contiene ancora dati Saldo. Vuoi copiare in esso le spese, le categorie e il budget di questo browser?");
+        if (!migrate) {
+          updateDataManager();
+          return;
+        }
+      }
+      remoteJson = await googleSheets.writeState(selected.id, state);
+    }
+
+    saveCloudLink({ ...selected, name: remote.title }, remoteJson);
+    updateDataManager(`Sincronizzato con “${remote.title}”.`);
+    showToast("Foglio Google collegato.");
+  } catch (error) {
+    console.error("Collegamento Google Sheets non riuscito:", error);
+    updateDataManager(error.message || "Non riesco a collegare il foglio Google.");
+  } finally {
+    connectButton.disabled = !(googleSheets?.isConfigured());
+  }
+}
+
+function scheduleCloudSync() {
+  if (!cloudSheet) return;
+  clearTimeout(cloudSyncTimer);
+  updateDataManager("Salvato su questo dispositivo; sincronizzazione in attesa…");
+  cloudSyncTimer = setTimeout(syncCloudState, 700);
+}
+
+async function syncCloudState() {
+  if (!cloudSheet) return;
+  if (cloudSyncing) {
+    cloudSyncPending = true;
+    return;
+  }
+  cloudSyncing = true;
+  try {
+    const remote = await googleSheets.readState(cloudSheet.id);
+    let localJson = cloudSnapshot();
+    const remoteState = remote.data ? normalizeDataState(remote.data) : null;
+    const remoteJson = remoteState ? cloudSnapshot(remoteState) : null;
+
+    if (remoteJson !== cloudBaseline) {
+      if (localJson === cloudBaseline && remoteState) {
+        applyDataState(remoteState);
+        localJson = cloudSnapshot();
+      } else if (!remoteState) {
+        const restoreSheet = window.confirm("La scheda Saldo nel foglio è vuota o è stata rimossa. Vuoi ripristinarla con i dati di questo dispositivo?");
+        if (!restoreSheet) {
+          updateDataManager("Foglio vuoto: i dati locali sono rimasti intatti e non sono stati sincronizzati.");
+          return;
+        }
+      } else if (localJson !== remoteJson) {
+        const keepLocal = window.confirm("Il foglio Google contiene modifiche più recenti di quelle caricate qui. OK: sovrascrivi il foglio con questa copia. Annulla: carica qui i dati dal foglio.");
+        if (!keepLocal && remoteState) {
+          applyDataState(remoteState);
+          saveCloudLink(cloudSheet, remoteJson);
+          updateDataManager(`Aggiornato dal foglio “${cloudSheet.name}”.`);
+          return;
+        }
+      }
+    }
+
+    if (localJson !== remoteJson) {
+      updateDataManager("Sincronizzazione con Google Sheets…");
+      cloudBaseline = await googleSheets.writeState(cloudSheet.id, state);
+      localStorage.setItem(CLOUD_BASELINE_KEY, cloudBaseline);
+    } else {
+      cloudBaseline = remoteJson;
+      if (remoteJson !== null) localStorage.setItem(CLOUD_BASELINE_KEY, remoteJson);
+    }
+    updateDataManager(`Sincronizzato con “${cloudSheet.name}”.`);
+  } catch (error) {
+    console.error("Sincronizzazione Google Sheets non riuscita:", error);
+    updateDataManager(`Dati salvati in locale. Sincronizzazione non riuscita: ${error.message}`);
+  } finally {
+    cloudSyncing = false;
+    if (cloudSyncPending) {
+      cloudSyncPending = false;
+      scheduleCloudSync();
+    }
+  }
+}
+
+function exportDataBackup() {
+  const backup = {
+    application: "Saldo",
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    data: state,
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `saldo-backup-${dateKey(new Date())}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast("Backup esportato.");
+}
+
+async function importDataBackup(file) {
+  try {
+    const backup = JSON.parse(await file.text());
+    const importedState = normalizeDataState(backup);
+    if (!window.confirm(`Il backup contiene ${importedState.expenses.length} spese e ${importedState.categories.length} categorie. Vuoi sostituire i dati presenti in questo browser?`)) return;
+    applyDataState(importedState);
+    persist();
+    showToast("Backup ripristinato.");
+  } catch (error) {
+    $("#cloud-status").textContent = error.message || "Il file selezionato non è un backup Saldo valido.";
+  } finally {
+    $("#import-data-file").value = "";
+  }
+}
+
+function disconnectGoogleSheet() {
+  if (!window.confirm("Vuoi disconnettere il foglio? I dati locali restano su questo browser e il foglio Google non verrà modificato.")) return;
+  clearTimeout(cloudSyncTimer);
+  googleSheets?.disconnect();
+  saveCloudLink(null, null);
+  showToast("Foglio Google disconnesso.");
+}
+
 function showToast(message) {
   const toast = $("#toast");
   toast.textContent = message;
@@ -574,11 +933,38 @@ form.addEventListener("submit", (event) => {
 });
 
 $("[data-open-expense]").addEventListener("click", () => openDialog());
+$("#budget-edit").addEventListener("click", openBudgetDialog);
+budgetForm.addEventListener("submit", saveBudget);
+document.querySelectorAll("[data-close-budget]").forEach((button) => {
+  button.addEventListener("click", () => budgetDialog.close());
+});
+budgetDialog.addEventListener("click", (event) => {
+  if (event.target === budgetDialog) budgetDialog.close();
+});
 document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => dialog.close()));
 dialog.addEventListener("close", resetVoiceInput);
 dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
 $("#add-category").addEventListener("click", addCategory);
 $("#manage-categories").addEventListener("click", openCategoryManager);
+$("#manage-data").addEventListener("click", openDataManager);
+$("#theme-toggle").addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", true);
+});
+$("#connect-google-sheet").addEventListener("click", connectGoogleSheet);
+$("#change-google-sheet").addEventListener("click", () => connectGoogleSheet(true));
+$("#disconnect-google-sheet").addEventListener("click", disconnectGoogleSheet);
+$("#export-data").addEventListener("click", exportDataBackup);
+$("#import-data").addEventListener("click", () => $("#import-data-file").click());
+$("#import-data-file").addEventListener("change", (event) => {
+  const [file] = event.target.files || [];
+  if (file) importDataBackup(file);
+});
+document.querySelectorAll("[data-close-data-manager]").forEach((button) => {
+  button.addEventListener("click", () => $("#data-manager-dialog").close());
+});
+$("#data-manager-dialog").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
 $("#voice-button").addEventListener("click", startVoiceInput);
 $("#expense-search").addEventListener("input", renderTransactions);
 $("#category-filter").addEventListener("change", renderTransactions);
@@ -604,18 +990,6 @@ document.querySelectorAll(".period-tab").forEach((button) => button.addEventList
   renderChart();
 }));
 
-$("#budget-edit").addEventListener("click", () => {
-  const value = window.prompt("Qual è il tuo budget mensile in euro?", String(state.budget).replace(".", ","));
-  if (value === null) return;
-  const budget = Number(value.replace(",", "."));
-  if (!Number.isFinite(budget) || budget <= 0) {
-    showToast("Inserisci un budget valido, maggiore di zero.");
-    return;
-  }
-  state.budget = Math.round(budget * 100) / 100;
-  persist();
-  renderSummary();
-  showToast("Budget mensile aggiornato.");
-});
-
+applyTheme(getInitialTheme());
 render();
+updateDataManager();

@@ -138,3 +138,115 @@
     grid-column: 1 / -1;
   }
 }
+
+.data-manager-dialog {
+  width: min(560px, calc(100% - 28px));
+}
+
+.data-manager-form .dialog-header {
+  margin-bottom: 16px;
+}
+
+.storage-status-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid #eeeff5;
+  border-radius: 11px;
+  background: #fff;
+  margin-bottom: 9px;
+}
+
+.storage-cloud-card {
+  background: #f9f8ff;
+  border-color: #efedff;
+}
+
+.storage-status-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: #f0edff;
+  color: #7565f0;
+  font-size: 17px;
+}
+
+.storage-status-card strong {
+  display: block;
+  margin: 1px 0 4px;
+  font-size: 11px;
+}
+
+.storage-status-card p,
+.backup-panel p,
+.google-setup-note {
+  margin: 0;
+  color: #85869b;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.data-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.google-setup-note {
+  margin: 0 0 15px;
+}
+
+.google-setup-note a {
+  color: #6252dc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.backup-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0 4px;
+  border-top: 1px solid #eeeff5;
+}
+
+.backup-panel h3 {
+  margin: 0 0 5px;
+  font: 700 12px Manrope, sans-serif;
+}
+
+.backup-panel .data-manager-actions {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.backup-panel .button,
+.data-manager-actions .button {
+  font-size: 10px;
+  padding: 9px 11px;
+}
+
+.data-button {
+  padding: 9px 12px;
+}
+
+@media (max-width: 600px) {
+  .data-button > span {
+    display: none;
+  }
+
+  .data-manager-form {
+    padding: 20px 16px;
+  }
+
+  .backup-panel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

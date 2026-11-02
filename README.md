@@ -12,7 +12,7 @@ Dashboard responsive realizzata con HTML, CSS e JavaScript vanilla, con un picco
 
 ## Dati e privacy
 
-Spese, categorie e budget sono conservati nel `localStorage` del browser. Il microfono è gestito dal browser tramite Web Speech API; solo il testo riconosciuto viene inviato al backend e a Groq per l'interpretazione. La dashboard non salva né invia registrazioni audio. Il piano gratuito di Groq ha limiti d'uso e disponibilità variabili: consulta [limiti aggiornati](https://console.groq.com/docs/rate-limits) e [informativa sulla privacy](https://groq.com/privacy-policy/) prima dell'uso.
+In modalità locale, spese, categorie e budget restano nel `localStorage` del browser e possono essere esportati/importati come backup JSON. Facoltativamente, ogni utente può autorizzare il proprio account Google e selezionare un foglio: l'app salva una copia sincronizzata nel Drive dell'utente e conserva una copia locale. Il token OAuth resta in memoria nel browser e non viene salvato dal backend. Il microfono usa la Web Speech API; solo la trascrizione testuale viene inviata a Groq per interpretare la spesa, mai l'audio. Groq ha limiti d'uso variabili: consulta [limiti aggiornati](https://console.groq.com/docs/rate-limits) e [informativa sulla privacy](https://groq.com/privacy-policy/) prima dell'uso.
 
 ## Avvio
 
@@ -21,6 +21,23 @@ Spese, categorie e budget sono conservati nel `localStorage` del browser. Il mic
 3. Avvia l'app con `npm start` e apri `http://localhost:3000`.
 
 Per usare il microfono, il browser richiede il relativo permesso e un'origine sicura come `localhost`. La trascrizione audio resta affidata alla Web Speech API del browser; solo il testo riconosciuto viene inviato al backend e interpretato da Groq. Il Free Plan ha limiti giornalieri e di frequenza: quando vengono raggiunti, le richieste possono fallire temporaneamente senza passare automaticamente a un piano a pagamento.
+
+## Backup locale e Google Sheets
+
+- Premi **Dati e backup → Esporta backup** per scaricare spese, categorie e budget in un file JSON. L'importazione valida il file e chiede conferma prima di sostituire i dati locali.
+- Per collegare Google Sheets, il proprietario dell'app deve configurare un progetto Google Cloud (passi sotto). Ogni utente accede con Google, seleziona un proprio foglio e sceglie se migrare i dati locali o caricare quelli già presenti nel foglio. L'app ricorda il foglio su quel browser: nelle sessioni successive basta ricollegarsi senza riselezionarlo (normalmente senza ripetere il consenso); **Cambia foglio** avvia una selezione diversa. Le modifiche restano prima salvate localmente e poi sincronizzate; se rileva modifiche divergenti, l'app chiede quale copia mantenere.
+- L'app aggiunge/usa una scheda denominata `Saldo` nel foglio selezionato. Se la scheda contiene già dati non riconosciuti, l'app si ferma senza sovrascriverli. Il foglio selezionato va usato come archivio dell'app; non modificare manualmente la scheda `Saldo`.
+
+### Configurazione Google Cloud (proprietario dell'app)
+
+1. Crea un progetto in [Google Cloud Console](https://console.cloud.google.com/) e abilita **Google Sheets API**, **Google Drive API** e **Google Picker API**.
+2. Configura la schermata di consenso OAuth. Per un'app pubblica aggiungi nome, email di supporto, dominio autorizzato e policy privacy; durante i test aggiungi gli account come utenti di test. Google può richiedere verifica OAuth prima di rendere l'accesso disponibile a tutti.
+3. Crea un OAuth Client ID di tipo **Web application** e aggiungi come *Authorized JavaScript origins* l'origine di produzione (ad esempio `https://saldo.example.com`), `http://localhost:3000` per lo sviluppo e ogni dominio preview che intendi usare. Le origini non accettano wildcard.
+4. Crea una API key per Google Picker. Limitala con *HTTP referrers* ai domini autorizzati e con *API restrictions* alle API necessarie (Picker, Drive e Sheets).
+5. Inserisci `clientId`, `apiKey` e il numero progetto `appId` in `js/google-config.js`. Questi identificatori vengono necessariamente esposti nel browser: non inserirvi client secret, chiavi di service account o altre credenziali private.
+6. Pubblica/redeploya l'app. Il collegamento Google richiede HTTPS, tranne `localhost`. Se la configurazione manca, la modalità locale e backup continuano a funzionare e il pulsante Google resta disabilitato.
+
+L'app usa OAuth lato browser con lo scope `drive.file`, che limita l'accesso ai file selezionati/concessi all'app. Non usa un account di servizio condiviso né un database centrale. La copia locale è conservata separatamente per browser e dominio; cambia dominio o cancella i dati del browser e la copia locale non sarà disponibile, perciò conserva backup o collega un foglio.
 
 ## Deploy su Vercel
 

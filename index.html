@@ -8,6 +8,9 @@
     <title>Saldo — La tua finanza, in equilibrio</title>
     <link rel="stylesheet" href="css/app.css" />
     <link rel="stylesheet" href="css/categories.css" />
+    <link rel="stylesheet" href="css/brutalist.css" />
+    <script defer src="js/google-config.js"></script>
+    <script defer src="js/google-sheets.js"></script>
     <script defer src="js/app.js"></script>
   </head>
   <body>
@@ -24,7 +27,7 @@
           <a class="side-link" href="#insights"><span class="nav-icon">▥</span>Analisi</a>
         </nav>
         <div class="sidebar-bottom">
-          <div class="privacy-card"><span class="privacy-icon">✳</span><strong>I tuoi dati, solo tuoi</strong><p>Le spese restano salvate su questo dispositivo.</p></div>
+          <div class="privacy-card"><span class="privacy-icon">✳</span><strong>I tuoi dati, la tua scelta</strong><p>Puoi tenerli in questo browser o sincronizzarli nel tuo Google Drive.</p></div>
           <div class="profile"><span class="avatar">S</span><span><strong>Il mio spazio</strong><small>Finanze personali</small></span><span class="profile-more">···</span></div>
         </div>
       </aside>
@@ -33,7 +36,7 @@
         <header class="topbar">
           <div class="mobile-brand"><span class="brand-mark">s</span><span>saldo<span class="brand-dot">.</span></span></div>
           <div class="breadcrumb">Il mio spazio <span>/</span> <strong>Panoramica</strong></div>
-          <div class="topbar-actions"><span class="private-badge"><span></span> Solo sul tuo dispositivo</span><button class="button button-primary top-add" data-open-expense>＋ <span>Aggiungi spesa</span></button></div>
+          <div class="topbar-actions"><span class="private-badge"><span></span> <span id="storage-mode-label">Solo su questo dispositivo</span></span><button class="button button-soft theme-toggle" id="theme-toggle" type="button" aria-label="Attiva tema scuro" title="Attiva tema scuro"><span class="theme-toggle-icon" aria-hidden="true">◐</span><span class="theme-toggle-label">Tema scuro</span></button><button class="button button-soft data-button" id="manage-data" type="button">☁ <span>Dati e backup</span></button><button class="button button-primary top-add" data-open-expense>＋ <span>Aggiungi spesa</span></button></div>
         </header>
 
         <section class="welcome-row">
@@ -71,7 +74,7 @@
           <div class="transaction-list" id="expense-list" aria-live="polite"></div>
           <div class="list-footer" id="list-footer"></div>
         </section>
-        <footer class="app-footer"><span>Fatto per avere più chiarezza, non più pensieri.</span><span><i></i> I tuoi dati non lasciano mai il dispositivo</span></footer>
+        <footer class="app-footer"><a class="portfolio-link" href="https://iamstefano.vercel.app" target="_blank" rel="noopener noreferrer">Dietro i numeri c’è un umano ↗</a><span><i></i> Scegli tu dove salvare i tuoi dati</span></footer>
       </main>
     </div>
 
@@ -81,6 +84,15 @@
         <div class="voice-box"><div class="voice-copy"><span class="voice-icon">⌁</span><span><strong>Dettala a voce</strong><small id="voice-status">Ad esempio: “12 euro per il pranzo”</small></span></div><button class="voice-button" type="button" id="voice-button" aria-label="Inserisci una spesa con la voce">🎙 <span>Parla</span></button></div>
         <div class="form-grid"><label class="field field-wide">Descrizione<input name="title" id="expense-title" type="text" placeholder="Es. Spesa al supermercato" maxlength="60" required /></label><label class="field">Importo (€)<input name="amount" id="expense-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0,00" required /></label><label class="field">Categoria<div class="select-with-add"><select name="category" id="expense-category" required></select><button type="button" id="add-category" aria-label="Aggiungi categoria">＋</button></div></label><label class="field">Data<input name="date" id="expense-date" type="date" required /></label><label class="field field-wide">Nota <span class="optional">facoltativa</span><input name="note" id="expense-note" type="text" placeholder="Aggiungi un dettaglio" maxlength="120" /></label></div>
         <p class="form-error" id="form-error" role="alert"></p><div class="dialog-actions"><button class="button button-soft" type="button" data-close-dialog>Annulla</button><button class="button button-primary" type="submit" id="save-expense">Salva spesa <span>→</span></button></div>
+      </form>
+    </dialog>
+    <dialog class="expense-dialog budget-dialog" id="budget-dialog" aria-labelledby="budget-dialog-title">
+      <form class="expense-form" id="budget-form">
+        <div class="dialog-header"><div><p class="eyebrow">CONTROLLO MENSILE</p><h2 id="budget-dialog-title">Imposta il budget</h2></div><button class="icon-button" type="button" data-close-budget aria-label="Chiudi">×</button></div>
+        <p class="budget-dialog-help">Scegli il limite di spesa mensile. Potrai aggiornarlo quando vuoi.</p>
+        <label class="field field-wide" for="budget-amount">Budget mensile (€)<input id="budget-amount" name="budget" type="number" min="1" step="0.01" inputmode="decimal" required /></label>
+        <p class="form-error" id="budget-error" role="alert"></p>
+        <div class="dialog-actions"><button class="button button-soft" type="button" data-close-budget>Annulla</button><button class="button button-primary" type="submit">Salva budget <span>→</span></button></div>
       </form>
     </dialog>
     <dialog class="expense-dialog category-manager-dialog" id="category-manager-dialog" aria-labelledby="category-manager-title">
@@ -95,6 +107,17 @@
         <p class="form-error category-manager-error" id="category-manager-error" role="alert"></p>
         <div class="dialog-actions"><button class="button button-soft" type="button" data-close-category-manager>Annulla</button><button class="button button-primary" type="submit">Salva categorie <span>→</span></button></div>
       </form>
+    </dialog>
+    <dialog class="expense-dialog data-manager-dialog" id="data-manager-dialog" aria-labelledby="data-manager-title">
+      <section class="expense-form data-manager-form">
+        <div class="dialog-header"><div><p class="eyebrow">I TUOI DATI, LA TUA SCELTA</p><h2 id="data-manager-title">Dati e backup</h2></div><button class="icon-button" type="button" data-close-data-manager aria-label="Chiudi">×</button></div>
+        <div class="storage-status-card"><span class="storage-status-icon" aria-hidden="true">⌂</span><div><strong>Questo dispositivo</strong><p>I dati vengono salvati automaticamente in questo browser.</p></div></div>
+        <div class="storage-status-card storage-cloud-card"><span class="storage-status-icon" aria-hidden="true">☁</span><div><strong>Google Sheets</strong><p id="cloud-status" role="status">Non collegato. Scegli un foglio nel tuo Drive per sincronizzare i dati.</p></div></div>
+        <div class="data-manager-actions"><button class="button button-primary" id="connect-google-sheet" type="button">Scegli il tuo foglio</button><button class="button button-soft" id="change-google-sheet" type="button" hidden>Cambia foglio</button><button class="button button-soft" id="disconnect-google-sheet" type="button" hidden>Disconnetti foglio</button></div>
+        <p class="google-setup-note" id="google-setup-note">Per attivare Google Sheets, il proprietario dell’app deve configurare OAuth e Google Picker. <a href="https://sheets.new" target="_blank" rel="noopener">Crea un foglio Google</a> se non ne hai già uno.</p>
+        <div class="backup-panel"><div><h3>Backup locale</h3><p>Esporta spese, categorie e budget in un file JSON oppure ripristina un backup.</p></div><div class="data-manager-actions"><button class="button button-soft" id="export-data" type="button">Esporta backup</button><button class="button button-soft" id="import-data" type="button">Importa backup</button><input id="import-data-file" type="file" accept="application/json,.json" hidden /></div></div>
+        <div class="dialog-actions"><button class="button button-soft" type="button" data-close-data-manager>Chiudi</button></div>
+      </section>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>
