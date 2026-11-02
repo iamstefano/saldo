@@ -286,14 +286,27 @@ function showToast(message) {
 }
 
 async function parseVoiceExpense(transcript) {
-  const response = await fetch("/api/parse-expense", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      transcript,
-      categories: state.categories.map((category) => category.name),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let response;
+  try {
+    response = await fetch("/api/parse-expense", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transcript,
+        categories: state.categories.map((category) => category.name),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Il server non ha risposto entro 30 secondi. Controlla che il deploy Vercel sia aggiornato e verifica i log della funzione.");
+    }
+    throw new Error("Non riesco a raggiungere il backend. Controlla la connessione e il deploy Vercel.");
+  } finally {
+    clearTimeout(timeout);
+  }
   const body = await response.text();
   let result;
   try {
@@ -338,7 +351,7 @@ function startVoiceInput() {
       $("#voice-status").textContent = `Compilato: “${transcript}”. Controlla i campi prima di salvare.`;
     } catch (error) {
       $("#form-error").textContent = error.message;
-      $("#voice-status").textContent = `Ho capito: “${transcript}”, ma non sono riuscito a interpretarlo.`;
+      $("#voice-status").textContent = `Errore durante l'interpretazione: ${error.message}`;
     } finally {
       button.disabled = false;
     }

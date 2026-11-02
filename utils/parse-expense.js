@@ -29,6 +29,10 @@ export async function handleParseExpense(req, res) {
       model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
       contents: JSON.stringify({ frase: transcript, categorie_disponibili: categories }),
       config: {
+        httpOptions: {
+          timeout: 20000,
+          retryOptions: { attempts: 1 },
+        },
         systemInstruction: "Interpreti dettature in italiano per registrare una singola spesa personale. Estrai l'importo numerico in euro, una descrizione breve e la categoria più adatta scegliendola esclusivamente tra quelle fornite. Non inventare un importo: se non è chiaro, usa 0. Non aggiungere informazioni non dette.",
         temperature: 0,
         responseMimeType: "application/json",
@@ -56,7 +60,11 @@ export async function handleParseExpense(req, res) {
 
     return res.json({ amount: Math.round(amount * 100) / 100, description, category: result.category });
   } catch (error) {
-    console.error("Interpretazione della spesa non riuscita:", error.message);
+    console.error("Interpretazione della spesa non riuscita:", {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+    });
     if (error.status === 429) {
       return res.status(429).json({ error: "La quota gratuita di Gemini è temporaneamente esaurita. Riprova più tardi." });
     }
