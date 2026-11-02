@@ -68,6 +68,9 @@ export async function handleParseExpense(req, res) {
     if (error.status === 429) {
       return res.status(429).json({ error: "La quota gratuita di Gemini è temporaneamente esaurita. Riprova più tardi." });
     }
+    if (error.status === 503 || error.code === "UNAVAILABLE") {
+      return res.status(503).json({ error: "Gemini è temporaneamente sovraccarico. Riprova tra un minuto." });
+    }
     return res.status(502).json({ error: "Non riesco a interpretare la frase in questo momento. Riprova o compila i campi manualmente." });
   }
 }
